@@ -1,4 +1,4 @@
-package com.dinglicom.model;
+package com.datapipeline.model;
 
 /**
  * @author ly

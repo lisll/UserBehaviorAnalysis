@@ -1,4 +1,4 @@
-package com.dinglicom.utils;
+package com.datapipeline.utils;
 
 
 import org.apache.kafka.clients.producer.KafkaProducer;
