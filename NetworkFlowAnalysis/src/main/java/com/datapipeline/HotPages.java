@@ -3,13 +3,12 @@ package com.datapipeline;
 import com.datapipeline.model.ApacheLogEvent;
 import com.datapipeline.model.PageViewCount;
 
+import com.datapipeline.sink.MysqlSinkFunction;
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.common.state.ListState;
-import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.api.common.state.MapState;
 import org.apache.flink.api.common.state.MapStateDescriptor;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.shaded.guava18.com.google.common.collect.Lists;
 import org.apache.flink.streaming.api.TimeCharacteristic;
@@ -22,16 +21,18 @@ import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrderness
 import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 
-import javax.xml.crypto.Data;
 import java.net.URL;
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
 public class HotPages {
@@ -39,11 +40,24 @@ public class HotPages {
         StreamExecutionEnvironment senv = StreamExecutionEnvironment.getExecutionEnvironment();
         senv.setParallelism(1);
         senv.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+        // 从文件中读数据
         URL resource = HotPages.class.getResource("/apache.log");
-//        DataStream<String> inputStream = senv.readTextFile(resource.toString());
-        DataStreamSource<String> inputStream = senv.socketTextStream("localhost", 7777);
-        inputStream.print("data");
-        DataStream<ApacheLogEvent> mapStream = inputStream.map(new MapFunction<String, ApacheLogEvent>() {
+        DataStream<String> inputStream = senv.readTextFile(resource.toString());
+        Properties properties = new Properties();
+        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,"n1:9092");
+        properties.put(ConsumerConfig.GROUP_ID_CONFIG,"consumer_test");
+        String topic = "pageView";  //hotitems
+
+//        FlinkKafkaConsumer flinkKafkaConsumer = new FlinkKafkaConsumer(topic, new CustomerDeserializationSchema(), properties);
+
+        FlinkKafkaConsumer flinkKafkaConsumer = new FlinkKafkaConsumer(topic, new SimpleStringSchema(), properties);
+        flinkKafkaConsumer.setStartFromEarliest();   // 从头开始消费
+
+        DataStream dataStreamSource = senv.addSource(flinkKafkaConsumer);
+
+//        DataStreamSource<String> inputStream = senv.socketTextStream("localhost", 7777);
+//        inputStream.print("data");
+        DataStream<ApacheLogEvent> mapStream = dataStreamSource.map(new MapFunction<String, ApacheLogEvent>() {
             @Override
             public ApacheLogEvent map(String line) throws Exception {
                 String[] fields = line.split(" ");
@@ -66,13 +80,14 @@ public class HotPages {
                 sideOutputLateData(outputTag).
                 aggregate(new HotPageAggregate(), new HotPageWindowFunction());
 
-        windAggreStream.print("result");
+//        windAggreStream.print("result");
          windAggreStream.getSideOutput(outputTag).print("lates");
 
         DataStream<String> topN  = windAggreStream.keyBy(PageViewCount::getWindowEnd).process(new HotPageTopN(3));
-
-        topN.print();
-
+        // 本地调试
+//        topN.print();
+        // 输出到数据库
+          topN.addSink(new MysqlSinkFunction());
         senv.execute("HotPages");
     }
 
